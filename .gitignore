@@ -1,0 +1,41 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.ipynb_checkpoints
+
+# OS / Editor
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Large Data
+Cataract-1k-Phase/
+Cataract-1k-Seg/
+
+# Models
+models/
+*.pth
+*.pt
+checkpoints/
+
+# Logs / Outputs
+*.log
+*.csv
+*.txt
+phase_training_loss.png
+seg_training_loss.png
+
+# Environment
+.venv/
+env/
+.vscode/
+.idea/
+
+# Trash folder
+.Trash-1000/
