@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # Usage:
+#   chmod +x train_segmentation.sh
 #   ./train_segmentation.sh /path/to/Cataract-1k-Seg
 #
 # Description:
