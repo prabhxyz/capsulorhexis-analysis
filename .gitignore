@@ -26,9 +26,6 @@ checkpoints/
 # Logs / Outputs
 *.log
 *.csv
-*.txt
-phase_training_loss.png
-seg_training_loss.png
 
 # Environment
 .venv/
