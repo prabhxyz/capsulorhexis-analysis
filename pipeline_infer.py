@@ -172,7 +172,7 @@ def main():
 
     # 4a) Load the segmentation model
     from models.segmentation_model import LightweightSegModel
-    seg_model = LightweightSegModel(num_classes=13, use_pretrained=False, aux_loss=True).to(device)
+    seg_model = LightweightSegModel(num_classes=4, use_pretrained=False, aux_loss=True).to(device)
     seg_model.load_state_dict(torch.load(args.seg_model_path, map_location=device))
     seg_model.eval()
 
