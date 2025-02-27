@@ -19,7 +19,7 @@ Cataract-1k-Phase/
 Cataract-1k-Seg/
 
 # Models
-*.pth
+#*.pth
 *.pt
 checkpoints/
 
