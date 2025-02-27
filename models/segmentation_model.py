@@ -1,23 +1,32 @@
 import torch
 import torch.nn as nn
-import torchvision.models.segmentation as segm_models
-from torchvision.models.segmentation import DeepLabV3_MobileNet_V3_Large_Weights
+import torch.nn.functional as F
+import timm
 
-class LightweightSegModel(nn.Module):
+class AdvancedSegModel(nn.Module):
     """
-    DeepLabv3 with MobileNetV3-Large backbone, with (num_classes) channels.
+    Example advanced segmentation model using a timm backbone (tf_efficientnetv2_s)
+    and a minimal upsampling head that resembles DeepLab-like behavior.
     """
-    def __init__(self, num_classes=13, use_pretrained=True, aux_loss=True):
+    def __init__(self, num_classes=13):
         super().__init__()
-        if use_pretrained:
-            weights = DeepLabV3_MobileNet_V3_Large_Weights.COCO_WITH_VOC_LABELS_V1
-            self.model = segm_models.deeplabv3_mobilenet_v3_large(weights=weights,
-                                                                  aux_loss=aux_loss)
-        else:
-            self.model = segm_models.deeplabv3_mobilenet_v3_large(weights=None,
-                                                                  aux_loss=aux_loss)
-        # Overwrite final head
-        self.model.classifier[4] = nn.Conv2d(256, num_classes, kernel_size=1)
+        encoder_name = "tf_efficientnetv2_s"
+        # pretrained encoder, features_only => returns multiple feature maps
+        self.encoder = timm.create_model(encoder_name, pretrained=True, features_only=True)
+
+        # We'll just pick the final feature for a minimal "head"
+        final_channels = self.encoder.feature_info[-1]["num_chs"]
+        self.reduce_conv = nn.Conv2d(final_channels, 256, kernel_size=1)
+        self.classifier  = nn.Conv2d(256, num_classes, kernel_size=1)
 
     def forward(self, x):
-        return self.model(x)
+        # x => (B, C, H, W)
+        feats = self.encoder(x)  # list of feature maps at different stages
+        f = feats[-1]            # last one is typically the deepest layer
+
+        f = self.reduce_conv(f)  # reduce channels
+        # upsample back to input size
+        f = F.interpolate(f, size=(x.shape[2], x.shape[3]), mode="bilinear", align_corners=False)
+        logits = self.classifier(f)
+
+        return {"out": logits}

@@ -1,23 +1,19 @@
 import torch
 import torch.nn as nn
-from torchvision.models import mobilenet_v3_large, MobileNet_V3_Large_Weights
+import timm
 
 class PhaseRecognitionNet(nn.Module):
     """
-    Single-frame classification for surgical phase, using MobileNetV3-Large pretrained on ImageNet.
-    Loads and infers from a checkpoint: 'phase_recognition.pth'.
+    Single-frame classification for surgical phase, using a more advanced
+    architecture from timm (e.g. convnext_tiny).
     """
     def __init__(self, num_phases=12, use_pretrained=True):
         super().__init__()
+        model_name = "convnext_tiny"
         if use_pretrained:
-            weights = MobileNet_V3_Large_Weights.IMAGENET1K_V1
-            backbone = mobilenet_v3_large(weights=weights)
+            self.base = timm.create_model(model_name, pretrained=True, num_classes=num_phases)
         else:
-            backbone = mobilenet_v3_large(weights=None)
-
-        # Replace the final classifier to match 'num_phases'
-        backbone.classifier[3] = nn.Linear(1280, num_phases)
-        self.base = backbone
+            self.base = timm.create_model(model_name, pretrained=False, num_classes=num_phases)
 
     def forward(self, x):
         return self.base(x)

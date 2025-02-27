@@ -1,9 +1,7 @@
 torch
 torchvision
-opencv-python
-numpy
-pillow
-matplotlib
+timm
 albumentations
+opencv-python
+matplotlib
 tqdm
-pandas
