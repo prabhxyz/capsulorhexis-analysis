@@ -7,35 +7,13 @@
 #
 # Usage:
 #   1) chmod +x setup_datasets.sh
-#   2) ./setup_datasets.sh <auth_token>
-#      or
-#      export SYNAPSE_AUTH_TOKEN="my_token_value"
-#      ./setup_datasets.sh
-#
-# If you want Synapse to remember your token for future commands, 
-# you can add "--rememberMe" to the synapse login command.
+#   2) ./setup_datasets.sh 
 
 # Step 1: Install synapseclient if not installed
 echo "Installing synapseclient..."
 pip install synapseclient
 
-# Step 2: Retrieve auth token from either:
-#   1) Script argument ($1), or
-#   2) SYNAPSE_AUTH_TOKEN environment variable, or
-#   3) Fallback to empty (will ask for login).
-TOKEN="${1:-$SYNAPSE_AUTH_TOKEN}"
-
-if [ -z "$TOKEN" ]; then
-  echo "No auth token provided. If you haven't logged in before, Synapse might ask for credentials."
-  echo "If you prefer automated login, pass the token as an argument or set SYNAPSE_AUTH_TOKEN."
-  # A manual login might prompt for user/password or token if no credentials are found.
-  synapse login
-else
-  echo "Logging into Synapse with provided auth token..."
-  synapse login --authToken "$TOKEN" # optionally: --rememberMe
-fi
-
-# Step 3: Create and download Cataract-1k-Phase
+# Step 2: Create and download Cataract-1k-Phase
 echo "Creating folder Cataract-1k-Phase and downloading data (syn53395146)..."
 mkdir -p Cataract-1k-Phase
 cd Cataract-1k-Phase
