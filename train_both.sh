@@ -1,19 +1,33 @@
 #!/usr/bin/env bash
-# Usage: ./train_both.sh /path/to/Cataract-1k-Phase /path/to/Cataract-1k-Seg
+# Trains both the Phase Recognition model and the Segmentation model in one script.
 
-PHASE_ROOT=$1
-SEG_ROOT=$2
-if [ -z "$PHASE_ROOT" ] || [ -z "$SEG_ROOT" ]; then
-  echo "Usage: ./train_both.sh <phase_root> <seg_root>"
-  exit 1
-fi
+# Usage:
+#   chmod +x train_both.sh
+#   ./train_both.sh /path/to/Cataract-1k-Phase /path/to/Cataract-1k-Seg
 
+PHASE_DATA_ROOT=$1
+SEG_DATA_ROOT=$2
+
+echo "=== TRAINING BOTH MODELS ==="
+echo "Phase data root: $PHASE_DATA_ROOT"
+echo "Seg data root:   $SEG_DATA_ROOT"
+
+# Hard-code some hyperparameters (can be changed):
+PHASE_EPOCHS=10
+PHASE_BATCH=8
+PHASE_LR=1e-4
+
+SEG_EPOCHS=10
+SEG_BATCH=4
+SEG_LR=1e-4
+
+# Call train_both.py, passing these arguments
 python ./training/train_both.py \
-    --phase_root "$PHASE_ROOT" \
-    --seg_root "$SEG_ROOT" \
-    --phase_epochs 10 \
-    --seg_epochs 10 \
-    --batch_size_phase 8 \
-    --batch_size_seg 6 \
-    --lr_phase 1e-4 \
-    --lr_seg 1e-4
+    --phase_root "$PHASE_DATA_ROOT" \
+    --phase_epochs $PHASE_EPOCHS \
+    --phase_batch $PHASE_BATCH \
+    --phase_lr $PHASE_LR \
+    --seg_root "$SEG_DATA_ROOT" \
+    --seg_epochs $SEG_EPOCHS \
+    --seg_batch $SEG_BATCH \
+    --seg_lr $SEG_LR

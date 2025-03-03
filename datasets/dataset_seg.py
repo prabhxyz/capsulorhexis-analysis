@@ -5,6 +5,8 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+NUM_SEG_CLASSES = 13
+
 class CataractSegDataset(Dataset):
     """
     Minimal example for segmentation data. Expects:
