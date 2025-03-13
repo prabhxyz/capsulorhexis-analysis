@@ -18,6 +18,9 @@ build/
 Cataract-1k-Phase/
 Cataract-1k-Seg/
 
+# Cataract Phase Recognition Repo.
+cataract-phase/
+
 # Models
 #*.pth
 *.pt

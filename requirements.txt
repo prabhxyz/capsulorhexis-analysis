@@ -1,7 +1,11 @@
 torch
 torchvision
-timm
+segmentation-models-pytorch
 albumentations
 opencv-python
+pycocotools
+numpy
+pandas
 matplotlib
-tqdm
+scikit-learn
+scipy
