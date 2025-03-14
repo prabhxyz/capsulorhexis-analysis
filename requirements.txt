@@ -3,9 +3,10 @@ torchvision
 segmentation-models-pytorch
 albumentations
 opencv-python
-pycocotools
 numpy
 pandas
 matplotlib
 scikit-learn
 scipy
+synapseclient
+argparse

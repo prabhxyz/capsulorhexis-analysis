@@ -1,129 +1,152 @@
 import os
 import json
-import numpy as np
+import random
 import cv2
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from pycocotools.coco import COCO
 
-class CataractCocoDataset(Dataset):
+class CataractSuperviselyDataset(Dataset):
     """
-    Custom dataset to read images and segmentation annotations (COCO format),
-    filtering only the relevant classes needed for the capsulorhexis
-    segmentation task (e.g., 'capsulorhexis forceps', 'cystotome',
-    and the 'capsulorhexis boundary' if annotated).
+    Reads data from:
+      Cataract-1k-Seg/Annotations/Images-and-Supervisely-Annotations/case_XXXX/
+        ├─ img/
+        │   ├─ caseXXXX_01.png
+        │   └─ ...
+        └─ ann/
+            ├─ caseXXXX_01.png.json
+            └─ ...
     
-    Assumes the user has extracted frames from each case_XXXX.mp4,
-    or can read directly from videos. For simplicity, we show reading
-    from frames that exist on disk plus the corresponding COCO JSON.
+    Each JSON file (e.g. 'caseXXXX_01.png.json') describes polygons in
+    data["objects"], each with:
+        "classTitle": <str>,
+        "points": {"exterior": [[x1,y1],[x2,y2],...], "interior":[]}
+
+    We'll fill a segmentation mask for the relevant classes only
+    (e.g. "Capsulorhexis Forceps", "Capsulorhexis Cystotome", etc.),
+    assigning each relevant class a unique integer label (1..N).
+    0 => background.
     """
 
     def __init__(
-        self, 
-        image_dir, 
-        annotation_json, 
+        self,
+        root_dir,           # path to top-level "Cataract-1k-Seg/"
+        case_ids,           # which cases (e.g. ["case_5013","case_1234"]) to include
         transforms=None,
         relevant_class_names=None
     ):
-        """
-        Args:
-            image_dir (str): Path to directory containing images/frames.
-            annotation_json (str): Path to the COCO annotation file (instances.json).
-            transforms (albumentations.Compose): Augmentations/transforms to apply.
-            relevant_class_names (list of str): The class names we keep for training 
-                (e.g. ['capsulorhexis forceps','capsulorhexis cystotome','capsulorhexis boundary']).
-        """
         super().__init__()
-        self.image_dir = image_dir
-        self.coco = COCO(annotation_json)
+        self.root_dir = root_dir
+        self.case_ids = case_ids
         self.transforms = transforms
 
-        # If the user wants to focus on certain classes, define them here:
         if relevant_class_names is None:
+            # Example default
             self.relevant_class_names = [
                 "capsulorhexis forceps",
-                "capsulorhexis cystotome",
-                "capsulorhexis boundary"
+                "capsulorhexis cystotome"
             ]
         else:
-            self.relevant_class_names = relevant_class_names
+            self.relevant_class_names = [x.lower() for x in relevant_class_names]
 
-        # Map COCO category_id --> our contiguous label index
-        # e.g. 0 = background, 1 = forceps, 2 = cystotome, 3 = boundary, etc.
-        # In principle, you can set these in any order you like:
-        self.cat2label = {}
-        self.label2cat = {}
-        label_idx = 1  # Start from 1 for foreground classes, 0 is background
-        for cat in self.coco.loadCats(self.coco.getCatIds()):
-            cat_name = cat["name"].lower()
-            if cat_name in self.relevant_class_names:
-                self.cat2label[cat["id"]] = label_idx
-                self.label2cat[label_idx] = cat["id"]
-                label_idx += 1
+        self.data_items = []  # will store (img_path, ann_path)
 
-        # Gather all image IDs from the COCO file
-        self.img_ids = self.coco.getImgIds()
+        sup_anno_dir = os.path.join(self.root_dir, "Annotations", "Images-and-Supervisely-Annotations")
 
-        # Filter out images that do not have at least one relevant category
-        valid_img_ids = []
-        for img_id in self.img_ids:
-            ann_ids = self.coco.getAnnIds(img_id)
-            anns = self.coco.loadAnns(ann_ids)
-            # Check if any annotation belongs to relevant classes:
-            keep = False
-            for ann in anns:
-                if ann["category_id"] in self.cat2label:
-                    keep = True
-                    break
-            if keep:
-                valid_img_ids.append(img_id)
+        for case_name in self.case_ids:
+            case_folder = os.path.join(sup_anno_dir, case_name)
+            img_dir = os.path.join(case_folder, "img")
+            ann_dir = os.path.join(case_folder, "ann")
+            if not os.path.isdir(img_dir) or not os.path.isdir(ann_dir):
+                continue
 
-        self.img_ids = valid_img_ids
+            # For each .png in 'img', look for the corresponding .png.json in 'ann'
+            image_files = sorted(
+                f for f in os.listdir(img_dir)
+                if f.lower().endswith(".png")
+            )
+            for img_file in image_files:
+                ann_file = img_file + ".json"  # e.g. "case5013_01.png.json"
+                img_path = os.path.join(img_dir, img_file)
+                ann_path = os.path.join(ann_dir, ann_file)
+                if os.path.isfile(img_path) and os.path.isfile(ann_path):
+                    self.data_items.append((img_path, ann_path))
 
     def __len__(self):
-        return len(self.img_ids)
+        return len(self.data_items)
 
     def __getitem__(self, idx):
-        img_id = self.img_ids[idx]
-        img_info = self.coco.loadImgs(img_id)[0]
-        filename = img_info["file_name"]
-        img_path = os.path.join(self.image_dir, filename)
-        
-        image = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        img_path, ann_path = self.data_items[idx]
 
-        # Create segmentation mask
-        ann_ids = self.coco.getAnnIds(img_id)
-        anns = self.coco.loadAnns(ann_ids)
+        # Read image
+        image_bgr = cv2.imread(img_path, cv2.IMREAD_COLOR)
+        image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-        # Initialize single-channel label mask with zeros:
-        mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
+        # Read JSON annotation
+        with open(ann_path, "r") as f:
+            data = json.load(f)
 
-        # Fill in each relevant annotation
-        for ann in anns:
-            cat_id = ann["category_id"]
-            if cat_id in self.cat2label:
-                label_val = self.cat2label[cat_id]
-                # Use the pycocotools to create mask
-                ann_mask = self.coco.annToMask(ann)  # 0/1
-                mask[ann_mask == 1] = label_val
+        height = data["size"]["height"]
+        width = data["size"]["width"]
 
-        # Optional Albumentations transforms (including random augmentations, resizing, etc.)
+        # If the actual image shape differs from (height,width) declared in JSON,
+        # we might want to resize or just trust the actual image. We'll assume they match.
+        # Prepare the segmentation mask
+        mask = np.zeros((height, width), dtype=np.uint8)
+
+        # Build a dict: classTitle => label index
+        # In principle, we can dynamically do this for all classes in the JSON, 
+        # but let's only keep relevant ones:
+        # We'll keep them in alphabetical order or just in the order we see them:
+        # For example, if we have 2 relevant classes, 1 => first class, 2 => second, etc.
+        # Actually, let's do a simpler approach:
+        #    cat2label = {} 
+        #    next_label = 1
+        #    for each relevant object => if classTitle not in cat2label => cat2label[classTitle] = next_label
+        # but the user might want a stable mapping. We'll do this dynamically:
+        cat2label = {}
+        next_label = 1
+
+        objects = data.get("objects", [])
+        for obj in objects:
+            classTitle = obj["classTitle"].lower()
+            if classTitle not in self.relevant_class_names:
+                continue
+
+            if classTitle not in cat2label:
+                cat2label[classTitle] = next_label
+                next_label += 1
+
+        # Now fill polygons
+        for obj in objects:
+            classTitle = obj["classTitle"].lower()
+            if classTitle in cat2label:
+                label_val = cat2label[classTitle]
+                polygon_points = obj["points"]["exterior"]  # list of [x,y] coords
+                # Fill polygon onto mask
+                # We must convert to a numpy int array shaped (num_points,1,2) for cv2.fillPoly
+                pts = np.array(polygon_points, dtype=np.int32).reshape((-1,1,2))
+                cv2.fillPoly(mask, [pts], color=label_val)
+
+        # Apply transforms
         if self.transforms is not None:
             augmented = self.transforms(image=image, mask=mask)
-            image = augmented['image']
-            mask = augmented['mask']
-        
+            image = augmented["image"]
+            mask = augmented["mask"]
+
         return image, mask
 
+
 def get_train_transforms():
-    """
-    Example of advanced Albumentations transforms for training.
-    """
     return A.Compose([
-        A.RandomResizedCrop(height=512, width=512, scale=(0.8,1.0), ratio=(0.9,1.1)),
+        A.RandomResizedCrop(
+            size=(512, 512),  # If older Albumentations, you can do "height=512,width=512" if that works
+            scale=(0.8,1.0),
+            ratio=(0.9,1.1),
+            p=1.0
+        ),
         A.HorizontalFlip(p=0.5),
         A.VerticalFlip(p=0.5),
         A.ShiftScaleRotate(shift_limit=0.1, scale_limit=0.2, rotate_limit=30, p=0.5),
@@ -133,9 +156,6 @@ def get_train_transforms():
     ])
 
 def get_val_transforms():
-    """
-    For validation, often just resize and normalize.
-    """
     return A.Compose([
         A.Resize(height=512, width=512),
         A.Normalize(),
