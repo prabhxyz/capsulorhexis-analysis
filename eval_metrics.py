@@ -30,7 +30,7 @@ def compute_dice(pred, target, num_classes):
         if denom == 0:
             dices.append(float('nan'))
         else:
-            dices.append(2.0 * intersection / denom)
+            dices.append(2.0*intersection/denom)
     return dices
 
 def get_confusion_matrix(pred, target, num_classes):

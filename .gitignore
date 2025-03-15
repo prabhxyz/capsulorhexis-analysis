@@ -22,7 +22,7 @@ Cataract-1k-Seg/
 cataract-phase/
 
 # Models
-#*.pth
+*.pth
 *.pt
 checkpoints/
 

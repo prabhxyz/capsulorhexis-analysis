@@ -1,6 +1,10 @@
 import segmentation_models_pytorch as smp
 
 def get_segmentation_model(model_type, num_classes, encoder_name="efficientnet-b0"):
+    """
+    Returns either a DeepLabV3+ or a U-Net model from segmentation_models_pytorch
+    with advanced backbones like 'resnet101' or 'efficientnet-b0'.
+    """
     if model_type.lower() == 'unet':
         return smp.Unet(
             encoder_name=encoder_name,

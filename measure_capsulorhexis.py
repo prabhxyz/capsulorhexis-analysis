@@ -2,6 +2,7 @@ import numpy as np
 import cv2
 
 def measure_capsulorhexis_region(rhexis_mask):
+    # Largest external contour => diameter, circularity, center offset
     contours, _ = cv2.findContours(rhexis_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if len(contours) == 0:
         return 0.0, 0.0, 0.0
@@ -12,7 +13,7 @@ def measure_capsulorhexis_region(rhexis_mask):
     (cx, cy), radius = cv2.minEnclosingCircle(largest)
     diameter_px = 2.0 * radius
     circularity = 0.0
-    if perimeter != 0:
+    if perimeter > 0:
         circularity = 4.0 * np.pi * (area / (perimeter * perimeter))
 
     H, W = rhexis_mask.shape[:2]
