@@ -1,186 +1,196 @@
 import os
 import random
-import torch
+import argparse
 import numpy as np
+import torch
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import argparse
 
-from dataset import CataractSuperviselyDataset, get_train_transforms, get_val_transforms
+from dataset import CataractSuperviselyAllDataset, get_train_transforms, get_val_transforms
 from model import get_segmentation_model
-from eval_metrics import compute_iou, compute_dice, get_confusion_matrix, confidence_interval
-from advanced_losses import dice_ce_loss
+from eval_metrics import compute_iou, compute_dice, confidence_interval
+from advanced_losses import weighted_focal_dice_loss
 
-# Optional:
+import torch.nn.functional as F
 from torch.optim import AdamW
-from torch.nn import CrossEntropyLoss
 from torch.optim.lr_scheduler import StepLR
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--k", type=int, default=5, help="k-fold cross validation. Default=5.")
     parser.add_argument("--model_type", type=str, default="deeplab", help="'unet' or 'deeplab'.")
-    parser.add_argument("--encoder_name", type=str, default="resnet101", help="Encoder/backbone.")
-    parser.add_argument("--num_classes", type=int, default=3, help="0=BG,1=Forceps,2=Cystotome => 3 total.")
+    parser.add_argument("--encoder_name", type=str, default="resnet101", help="Backbone.")
+    parser.add_argument("--num_classes", type=int, default=10, help="Max classes across dataset, 0=bg => total=10.")
     parser.add_argument("--epochs", type=int, default=150)
     parser.add_argument("--batch_size", type=int, default=4)
     parser.add_argument("--lr", type=float, default=1e-4)
-    parser.add_argument("--use_dice_ce", action='store_true',
-                        help="If set, use combined Dice+CE loss instead of pure CE.")
+    parser.add_argument("--alpha", type=float, default=0.5, help="Alpha for Weighted Focal Loss portion.")
+    parser.add_argument("--gamma", type=float, default=2.0, help="Gamma for focal focusing.")
     args = parser.parse_args()
 
     data_dir = "Cataract-1k-Seg"
-    sup_anno_dir = os.path.join(data_dir, "Annotations", "Images-and-Supervisely-Annotations")
+    sup_dir = os.path.join(data_dir, "Annotations", "Images-and-Supervisely-Annotations")
     all_cases = [
-        d for d in os.listdir(sup_anno_dir)
-        if d.startswith("case_") and os.path.isdir(os.path.join(sup_anno_dir, d))
+        d for d in os.listdir(sup_dir)
+        if d.startswith("case_") and os.path.isdir(os.path.join(sup_dir, d))
     ]
     all_cases.sort()
+    n_cases = len(all_cases)
+    print(f"Found {n_cases} total cases => using k={args.k} fold cross validation.")
 
     random.seed(42)
     random.shuffle(all_cases)
-    split_idx = int(0.8 * len(all_cases))
-    train_cases = all_cases[:split_idx]
-    val_cases = all_cases[split_idx:]
-    print(f"Found {len(all_cases)} cases => {len(train_cases)} train, {len(val_cases)} val.")
 
-    train_dataset = CataractSuperviselyDataset(
-        root_dir=data_dir,
-        case_ids=train_cases,
-        transforms=get_train_transforms(),
-        relevant_class_names=["Capsulorhexis Forceps", "Capsulorhexis Cystotome"]
-    )
-    val_dataset = CataractSuperviselyDataset(
-        root_dir=data_dir,
-        case_ids=val_cases,
-        transforms=get_val_transforms(),
-        relevant_class_names=["Capsulorhexis Forceps", "Capsulorhexis Cystotome"]
-    )
+    fold_size = int(np.ceil(n_cases / args.k))
+    folds = []
+    for i in range(args.k):
+        start = i*fold_size
+        end = start + fold_size
+        folds.append(all_cases[start:end])
 
-    print(f"Train dataset size = {len(train_dataset)}")
-    print(f"Val dataset size   = {len(val_dataset)}")
+    fold_results = []
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
+    for fold_idx in range(args.k):
+        print(f"\n=== FOLD {fold_idx+1}/{args.k} ===")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = get_segmentation_model(args.model_type, args.num_classes, args.encoder_name)
-    model.to(device)
+        val_cases = folds[fold_idx]
+        train_cases = []
+        for i in range(args.k):
+            if i != fold_idx:
+                train_cases.extend(folds[i])
 
-    # AdamW with optional weight decay
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        train_dataset = CataractSuperviselyAllDataset(
+            root_dir=data_dir,
+            case_ids=train_cases,
+            transforms=get_train_transforms()
+        )
+        val_dataset = CataractSuperviselyAllDataset(
+            root_dir=data_dir,
+            case_ids=val_cases,
+            transforms=get_val_transforms()
+        )
 
-    # We can optionally combine Dice+CE
-    ce_criterion = CrossEntropyLoss()
+        print(f"Fold {fold_idx+1}: train={len(train_dataset)} images, val={len(val_dataset)} images.")
 
-    # Example scheduler to reduce LR every 50 epochs
-    scheduler = StepLR(optimizer, step_size=50, gamma=0.5)
+        train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+        val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
-    # For saving
-    checkpoints_folder = "checkpoints"
-    os.makedirs(checkpoints_folder, exist_ok=True)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = get_segmentation_model(args.model_type, args.num_classes, args.encoder_name)
+        model.to(device)
 
-    best_val_iou = 0.0
-    train_loss_history = []
-    val_iou_history = []
-    val_dice_history = []
+        optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        scheduler = StepLR(optimizer, step_size=50, gamma=0.5)
 
-    for epoch in range(args.epochs):
-        # 1) TRAIN
-        model.train()
-        running_loss = 0.0
-        for images, masks in tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs} [train]"):
-            images, masks = images.to(device), masks.to(device)
-            optimizer.zero_grad()
-            logits = model(images)
+        fold_dir = f"fold_{fold_idx+1}"
+        os.makedirs(fold_dir, exist_ok=True)
 
-            if args.use_dice_ce:
-                loss = dice_ce_loss(logits, masks)
-            else:
-                loss = ce_criterion(logits, masks.long())
+        train_loss_history = []
+        val_iou_history = []
+        val_dice_history = []
 
-            loss.backward()
-            optimizer.step()
-            running_loss += loss.item() * images.size(0)
+        best_val_iou = 0.0
 
-        epoch_loss = running_loss / len(train_loader.dataset)
-        train_loss_history.append(epoch_loss)
-
-        scheduler.step()  # Step the scheduler if desired
-
-        # 2) VALIDATION
-        model.eval()
-        iou_scores = []
-        dice_scores = []
-        with torch.no_grad():
-            for images, masks in tqdm(val_loader, desc=f"Epoch {epoch+1}/{args.epochs} [val]"):
+        for epoch in range(args.epochs):
+            # ---------------- TRAIN ----------------
+            model.train()
+            running_loss = 0.0
+            for images, masks in tqdm(train_loader, desc=f"[Fold {fold_idx+1} E{epoch+1}/{args.epochs} train]"):
                 images, masks = images.to(device), masks.to(device)
+                optimizer.zero_grad()
                 logits = model(images)
-                preds = torch.argmax(logits, dim=1)
+                loss = weighted_focal_dice_loss(
+                    logits, masks,
+                    alpha=args.alpha,
+                    gamma=args.gamma
+                )
+                loss.backward()
+                optimizer.step()
+                running_loss += loss.item() * images.size(0)
 
-                for b in range(images.size(0)):
-                    pred_b = preds[b].cpu().numpy()
-                    mask_b = masks[b].cpu().numpy()
-                    iou = compute_iou(pred_b, mask_b, args.num_classes)
-                    dice = compute_dice(pred_b, mask_b, args.num_classes)
-                    valid_classes = list(range(1, args.num_classes))
-                    iou_vals = [iou[c] for c in valid_classes]
-                    dice_vals = [dice[c] for c in valid_classes]
-                    iou_avg = np.nanmean(iou_vals) if (iou_vals and not all(np.isnan(iou_vals))) else 0.0
-                    dice_avg = np.nanmean(dice_vals) if (dice_vals and not all(np.isnan(dice_vals))) else 0.0
-                    iou_scores.append(iou_avg)
-                    dice_scores.append(dice_avg)
+            epoch_loss = running_loss / len(train_loader.dataset)
+            train_loss_history.append(epoch_loss)
 
-        mean_iou = np.nanmean(iou_scores) if len(iou_scores)>0 else 0.0
-        mean_dice = np.nanmean(dice_scores) if len(dice_scores)>0 else 0.0
-        val_iou_history.append(mean_iou)
-        val_dice_history.append(mean_dice)
+            scheduler.step()
 
-        print(f"[Epoch {epoch+1}] train_loss={epoch_loss:.4f}, val_mIoU={mean_iou:.4f}, val_mDice={mean_dice:.4f}")
+            # ---------------- VAL ----------------
+            model.eval()
+            iou_scores = []
+            dice_scores = []
+            with torch.no_grad():
+                for images, masks in tqdm(val_loader, desc=f"[Fold {fold_idx+1} E{epoch+1}/{args.epochs} val]"):
+                    images, masks = images.to(device), masks.to(device)
+                    logits = model(images)
+                    preds = torch.argmax(logits, dim=1)
+                    for b in range(images.size(0)):
+                        pred_b = preds[b].cpu().numpy()
+                        mask_b = masks[b].cpu().numpy()
 
-        # Save checkpoint
-        checkpoint_path = os.path.join(checkpoints_folder, f"epoch_{epoch+1}.pth")
-        torch.save(model.state_dict(), checkpoint_path)
+                        iou_list = compute_iou(pred_b, mask_b, args.num_classes)
+                        dice_list = compute_dice(pred_b, mask_b, args.num_classes)
+                        # skip background=0 => measure classes [1..num_classes-1]
+                        valid = list(range(1, args.num_classes))
+                        iou_vals = [iou_list[c] for c in valid]
+                        dice_vals = [dice_list[c] for c in valid]
+                        iou_avg = np.nanmean(iou_vals) if (iou_vals and not all(np.isnan(iou_vals))) else 0.0
+                        dice_avg = np.nanmean(dice_vals) if (dice_vals and not all(np.isnan(dice_vals))) else 0.0
+                        iou_scores.append(iou_avg)
+                        dice_scores.append(dice_avg)
 
-        # If best so far, keep in root
-        if mean_iou > best_val_iou:
-            best_val_iou = mean_iou
-            torch.save(model.state_dict(), "best_segmentation_model.pth")
-            print("   [BEST] Saved best model so far.")
+            mean_iou = np.nanmean(iou_scores) if len(iou_scores)>0 else 0.0
+            mean_dice = np.nanmean(dice_scores) if len(dice_scores)>0 else 0.0
+            val_iou_history.append(mean_iou)
+            val_dice_history.append(mean_dice)
 
-    # 3) Final stats
-    m, ci_low, ci_high = confidence_interval(val_iou_history)
-    print(f"Val IoU => mean={m:.4f}, 95% CI=({ci_low:.4f}, {ci_high:.4f})")
+            print(f"[Fold {fold_idx+1}, Epoch {epoch+1}] train_loss={epoch_loss:.4f}, val_mIoU={mean_iou:.4f}, val_mDice={mean_dice:.4f}")
 
-    # Plot
-    plt.figure()
-    plt.plot(range(1,args.epochs+1), train_loss_history, marker='o')
-    plt.title("Train Loss per Epoch")
-    plt.xlabel("Epoch")
-    plt.ylabel("Loss")
-    plt.grid(True)
-    plt.savefig("train_loss_curve.png", dpi=150)
-    plt.close()
+            # Save best
+            if mean_iou > best_val_iou:
+                best_val_iou = mean_iou
+                torch.save(model.state_dict(), os.path.join(fold_dir, "best_model.pth"))
+                print(f"   [BEST] Saved best model so far for fold {fold_idx+1}")
 
-    plt.figure()
-    plt.plot(range(1,args.epochs+1), val_iou_history, marker='o', color='orange')
-    plt.title("Validation Mean IoU per Epoch")
-    plt.xlabel("Epoch")
-    plt.ylabel("Mean IoU")
-    plt.grid(True)
-    plt.savefig("val_iou_curve.png", dpi=150)
-    plt.close()
+            # ----------- SAVE GRAPHS EVERY EPOCH -----------
+            # 1) train_loss
+            plt.figure()
+            plt.plot(range(1,len(train_loss_history)+1), train_loss_history, marker='o')
+            plt.title(f"Fold {fold_idx+1} - Train Loss (Epoch {epoch+1})")
+            plt.xlabel("Epoch")
+            plt.ylabel("Loss")
+            plt.grid(True)
+            plt.savefig(os.path.join(fold_dir, f"train_loss_epoch_{epoch+1}.png"), dpi=150)
+            plt.close()
 
-    plt.figure()
-    plt.plot(range(1,args.epochs+1), val_dice_history, marker='o', color='green')
-    plt.title("Validation Mean Dice per Epoch")
-    plt.xlabel("Epoch")
-    plt.ylabel("Mean Dice")
-    plt.grid(True)
-    plt.savefig("val_dice_curve.png", dpi=150)
-    plt.close()
+            # 2) val_iou
+            plt.figure()
+            plt.plot(range(1,len(val_iou_history)+1), val_iou_history, marker='o', color='orange')
+            plt.title(f"Fold {fold_idx+1} - Val IoU (Epoch {epoch+1})")
+            plt.xlabel("Epoch")
+            plt.ylabel("Mean IoU")
+            plt.grid(True)
+            plt.savefig(os.path.join(fold_dir, f"val_iou_epoch_{epoch+1}.png"), dpi=150)
+            plt.close()
 
-    print("Training done. Checkpoints in 'checkpoints/', best model => best_segmentation_model.pth")
+            # 3) val_dice
+            plt.figure()
+            plt.plot(range(1,len(val_dice_history)+1), val_dice_history, marker='o', color='green')
+            plt.title(f"Fold {fold_idx+1} - Val Dice (Epoch {epoch+1})")
+            plt.xlabel("Epoch")
+            plt.ylabel("Mean Dice")
+            plt.grid(True)
+            plt.savefig(os.path.join(fold_dir, f"val_dice_epoch_{epoch+1}.png"), dpi=150)
+            plt.close()
+
+        print(f"FOLD {fold_idx+1} best val IoU = {best_val_iou:.4f}")
+        fold_results.append(best_val_iou)
+
+    # Summarize
+    print("\n=== Cross Validation Summary ===")
+    print("Fold IoUs:", fold_results)
+    avg_iou = np.mean(fold_results)
+    std_iou = np.std(fold_results, ddof=1) if len(fold_results)>1 else 0
+    print(f"k={args.k} folds => IoU= {avg_iou:.4f} ± {std_iou:.4f}")
 
 if __name__ == "__main__":
     main()
