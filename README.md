@@ -244,7 +244,7 @@ With these steps, you can replicate the entire pipeline locally. The **graphs** 
 
 ---
 
-## **9. Project Usage Summary**
+## **9. Model Weights**
 
 Because the final trained model is quite large, we provide it via a **Google Drive link**. You can **download** the file here:
 
