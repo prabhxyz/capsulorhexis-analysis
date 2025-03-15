@@ -126,20 +126,20 @@ During training, we create subfolders named `fold_1/`, `fold_2/`, etc., each sto
 
 ## **4. Example Training Results**  
 
-When you run for 200 epochs, the model’s performance typically stabilizes around epoch 100–150. Below are example graphs from **Fold 1** at ~190 epochs:
+When you run for 200 epochs, the model’s performance typically stabilizes around epoch 100–150. Below are graphs from **Fold 1**:
 
 1. **Train Loss**  
-   ![Fold 1 - Train Loss (Epoch 190)](fold_1/train_loss_epoch_190.png)  
+   ![Fold 1 - Train Loss (Epoch 190)](fold_1/train_loss_epoch_200.png)  
    - Early on, the loss is quite high (> 0.8). As the model learns, it rapidly drops below 0.3 by around epoch ~30, and eventually settles near 0.0–0.05.  
    - This indicates the model is **confident** about classifying most pixels.
 
 2. **Validation Mean Dice**  
-   ![Fold 1 - Val Dice (Epoch 190)](fold_1/val_dice_epoch_190.png)  
+   ![Fold 1 - Val Dice (Epoch 190)](fold_1/val_dice_epoch_200.png)  
    - Initially around 0.60–0.70, it steadily climbs above 0.80 by mid‐training.  
    - Eventually, it hovers ~0.85, meaning on average the predicted masks overlap 85% of the ground‐truth region.
 
 3. **Validation Mean IoU**  
-   ![Fold 1 - Val IoU (Epoch 190)](fold_1/val_iou_epoch_190.png)  
+   ![Fold 1 - Val IoU (Epoch 190)](fold_1/val_iou_epoch_200.png)  
    - Starting ~0.55, it surpasses 0.70 after ~30–40 epochs and ultimately reaches ~0.80.  
    - IoU is stricter than Dice, but ~0.80 is a strong result for multi‐class segmentation tasks.
 
@@ -167,14 +167,14 @@ Extract or stream frames for the “capsulorhexis phase” of surgery into a fol
 ```
 
 ### **5.3 Running the Inference**  
-Use the best model checkpoint from a fold, e.g. `fold_1/best_model.pth`, and run:
+Use the best model checkpoint from a fold, e.g. `best_model.pth`, and run:
 
 ```bash
 python inference.py \
   --model_type deeplab \
   --encoder_name resnet101 \
   --num_classes 10 \
-  --model_path fold_1/best_model.pth \
+  --model_path best_model.pth \
   --frames_dir /cataract-phase/temp/ \
   --forceps_class_id 2 \
   --rhexis_class_id 3 \
@@ -241,3 +241,15 @@ python inference.py \
 4. **Check** the overlay images for visual debugging, and consult the final CSV for the diameter, circularity, and offset.
 
 With these steps, you can replicate the entire pipeline locally. The **graphs** (loss, IoU, Dice) confirm that the model converges effectively, enabling the robust **capsulorhexis** measurement that this project aims to provide.
+
+---
+
+## **9. Project Usage Summary**
+
+Because the final trained model is quite large, we provide it via a **Google Drive link**. You can **download** the file here:
+
+> [**Download Pre-Trained Segmentation Model Weights**](https://drive.google.com/file/d/18VPFlShotdFYe_7z6ay-TlMuDxOREKgx/view?usp=sharing)
+
+Save the downloaded file as `best_model.pth` (or similar) in your local repository.
+
+*Built by [Prabhdeep](https://github.com/prabhxyz) :)*
